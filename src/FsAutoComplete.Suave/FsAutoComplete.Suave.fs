@@ -100,9 +100,9 @@ let main argv =
                 while !loop do
                     let! msg = webSocket.read()
                     match msg with
-                    | (Ping, _, _) -> do! webSocket.send Pong [||] true
+                    | (Ping, _, _) -> do! webSocket.send Pong (Sockets.ByteSegment [||]) true
                     | (Close, _, _) ->
-                        do! webSocket.send Close [||] true
+                        do! webSocket.send Close (Sockets.ByteSegment [||]) true
                         client <- None
                         loop := false
                     | _ -> ()

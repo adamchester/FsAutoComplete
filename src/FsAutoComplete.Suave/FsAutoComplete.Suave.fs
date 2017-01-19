@@ -91,7 +91,6 @@ let main argv =
             return! Response.response HttpCode.HTTP_200 res' r
         }
 
-
     let echo (webSocket : WebSocket) =
         fun cx ->
             client <- Some webSocket
@@ -100,15 +99,29 @@ let main argv =
                 while !loop do
                     let! msg = webSocket.read()
                     match msg with
-                    | (Ping, _, _) -> do! webSocket.send Pong [||] true
+                    | (Ping, _, _) -> do! webSocket.send Pong (Sockets.ByteSegment [||]) true
                     | (Close, _, _) ->
-                        do! webSocket.send Close [||] true
+                        do! webSocket.send Close (Sockets.ByteSegment [||]) true
                         client <- None
                         loop := false
                     | _ -> ()
                 }
 
+    let logger = Logging.Targets.create Logging.Info [|"FSAC"; "Suave"|]
+
+    let fsacRequestLogger (ctx: HttpContext) =
+        let fieldMap : Map<string, obj> =
+            [
+                "requestMethod", box (ctx.request.``method``)
+                "requestUrlPathAndQuery", box (ctx.request.url.PathAndQuery)
+                "httpStatusCode", box ctx.response.status.code
+                "requestForm", box ctx.request.form
+            ] |> Map
+        "{requestMethod} {requestUrlPathAndQuery} {requestForm}", fieldMap
+
     let app =
+        logWithLevelStructured Logging.Info logger fsacRequestLogger
+        >=>
         choose [
             // path "/notify" >=> handShake echo
             path "/parse" >=> handler (fun (data : ParseRequest) -> commands.Parse data.FileName data.Lines data.Version)
@@ -156,7 +169,7 @@ let main argv =
             path "/lint" >=> handler (fun (data: LintRequest) -> commands.Lint data.FileName)
             path "/namespaces" >=> positionHandler (fun data tyRes lineStr _   -> commands.GetNamespaceSuggestions tyRes { Line = data.Line; Col = data.Column } lineStr)
             path "/unionCaseGenerator" >=> positionHandler (fun data tyRes lineStr lines   -> commands.GetUnionPatternMatchCases tyRes { Line = data.Line; Col = data.Column } lines lineStr)
-        ]
+        ] >=> logWithLevelStructured Logging.Info logger logFormatStructured
 
     let port =
         try
@@ -167,6 +180,8 @@ let main argv =
     let defaultBinding = defaultConfig.bindings.[0]
     let withPort = { defaultBinding.socketBinding with port = uint16 port }
     let serverConfig =
-        { defaultConfig with bindings = [{ defaultBinding with socketBinding = withPort }]}
+        { defaultConfig with bindings = [{ defaultBinding with socketBinding = withPort }]
+                             logger = logger }
+
     startWebServer serverConfig app
     0

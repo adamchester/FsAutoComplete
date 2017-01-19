@@ -10,8 +10,16 @@ nuget FAKE
 nuget NUnit
 nuget NUnit.Runners
 nuget Octokit
-nuget Suave < 2.0
 nuget FSharpLint.Core prerelease
 nuget FSharp.Core redirects:on
 
 github fsharp/FAKE modules/Octokit/Octokit.fsx
+
+group FsAutoCompleteSauve
+    framework: net46
+    source https://www.nuget.org/api/v2/
+    nuget Suave
+    nuget FSharp.Compiler.Service framework: >= net45
+    nuget FSharp.Compiler.Service.ProjectCracker
+    nuget Newtonsoft.Json
+    nuget FSharp.Core redirects:on

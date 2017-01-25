@@ -182,7 +182,7 @@ type FSharpCompilerServiceChecker() =
             | NeedChecking -> NeedChecking
             | Checked -> NeedChecking)
         else oldVersion, oldState))
-    |> debug "[LanguageService] %s changed: set status to %A" filePath
+    |> ignore
 
 
   let fixFileName path =
@@ -273,7 +273,6 @@ type FSharpCompilerServiceChecker() =
 
   member __.ParseAndCheckFileInProject(filePath, version, source, options) =
     async {
-      debug "[LanguageService] ParseAndCheckFileInProject - enter"
       fileChanged filePath version
       let fixedFilePath = fixFileName filePath
       let! res = Async.Catch (async {
@@ -288,8 +287,6 @@ type FSharpCompilerServiceChecker() =
                       | _ -> false) do
                    do! Async.Sleep 20
 
-               debug "[LanguageService] Change state for %s to `BeingChecked`" filePath
-               debug "[LanguageService] Parse and typecheck source..."
                return! checker.ParseAndCheckFileInProject
                                  (fixedFilePath, version, source, options,
                                   IsResultObsolete (fun _ -> isResultObsolete filePath), null)
@@ -300,7 +297,6 @@ type FSharpCompilerServiceChecker() =
                | _ -> ()
       })
 
-      debug "[LanguageService]: Check completed"
       // Construct new typed parse result if the task succeeded
       return
           match res with

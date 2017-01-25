@@ -223,6 +223,3 @@ type Path with
         with _ -> path
 
 
-
-let inline debug msg = Printf.kprintf Debug.WriteLine msg
-let inline fail msg = Printf.kprintf Debug.Fail msg

@@ -11,7 +11,7 @@ module internal Main =
 
   module Response = CommandResponse
   let originalFs = AbstractIL.Internal.Library.Shim.FileSystem
-  let commands = Commands writeJson
+  let commands = Commands (writeJson, fun _ _ -> ()) //TODO: Add real logger for command line version
   let fs = new FileSystem(originalFs, commands.Files.TryFind)
   AbstractIL.Internal.Library.Shim.FileSystem <- fs
   let commandQueue = new BlockingCollection<Command>(10)

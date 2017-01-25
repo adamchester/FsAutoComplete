@@ -38,9 +38,13 @@ module internal Utils =
 [<EntryPoint>]
 let main argv =
     let mutable client : WebSocket option  = None
+    let logger = Logging.Targets.create Logging.Info [|"FSAC"; "Suave"|]
+
+    let logFunc msg parms =
+        printfn "[FSAC Logger] %s" msg //TODO: Use real logger
 
     System.Threading.ThreadPool.SetMinThreads(8, 8) |> ignore
-    let commands = Commands(writeJson)
+    let commands = Commands(writeJson, logFunc)
     let originalFs = AbstractIL.Internal.Library.Shim.FileSystem
     let fs = new FileSystem(originalFs, commands.Files.TryFind)
     AbstractIL.Internal.Library.Shim.FileSystem <- fs
@@ -107,7 +111,6 @@ let main argv =
                     | _ -> ()
                 }
 
-    let logger = Logging.Targets.create Logging.Info [|"FSAC"; "Suave"|]
 
     let fsacRequestLogger (ctx: HttpContext) =
         let fieldMap : Map<string, obj> =

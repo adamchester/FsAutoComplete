@@ -223,3 +223,4 @@ type Path with
         with _ -> path
 
 
+type Logger = string -> obj[] -> unit

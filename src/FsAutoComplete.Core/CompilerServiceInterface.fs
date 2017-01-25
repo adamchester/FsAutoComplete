@@ -9,7 +9,8 @@ open System.Collections.Concurrent
 type ParseAndCheckResults
     (
         parseResults: FSharpParseFileResults,
-        checkResults: FSharpCheckFileResults
+        checkResults: FSharpCheckFileResults,
+        logger      : Logger
     ) =
 
   member __.TryGetMethodOverrides (lines: LineStr[]) (pos: Pos) = async {
@@ -158,7 +159,7 @@ type private FileState =
 
 type Version = int
 
-type FSharpCompilerServiceChecker() =
+type FSharpCompilerServiceChecker(logger : Logger) =
   let checker =
     FSharpChecker.Create(
       projectCacheSize = 200,
@@ -307,7 +308,7 @@ type FSharpCompilerServiceChecker() =
 
   member __.TryGetRecentCheckResultsForFile(file, options, ?source) =
     checker.TryGetRecentCheckResultsForFile(file, options, ?source=source)
-    |> Option.map (fun (pr, cr, _) -> ParseAndCheckResults (pr, cr))
+    |> Option.map (fun (pr, cr, _) -> ParseAndCheckResults (pr, cr, logger))
 
 
 

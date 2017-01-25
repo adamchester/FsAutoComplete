@@ -352,3 +352,4 @@ type Path with
 
 let asyncMaybe = AsyncMaybeBuilder()
 
+type Logger = string -> obj[] -> unit

@@ -14,6 +14,8 @@ type ParseAndCheckResults
     ) =
 
   member __.TryGetMethodOverrides (lines: LineStr[]) (pos: Pos) = async {
+    logger (sprintf "Get method overrides in %A for file %s" pos parseResults.FileName) [||]
+
     // Find the starting point, ideally right after the first '('
     let lineCutoff = pos.Line - 6
     let commas, line, col =
@@ -49,6 +51,8 @@ type ParseAndCheckResults
     return Success(meth, commas) }
 
   member __.TryFindDeclaration (pos: Pos) (lineStr: LineStr) = async {
+    logger (sprintf "Get declaration in %A for file %s" pos parseResults.FileName) [||]
+
     match Parsing.findLongIdents(pos.Col - 1, lineStr) with
     | None -> return Failure "Could not find ident at this location"
     | Some(col, identIsland) ->
@@ -61,6 +65,8 @@ type ParseAndCheckResults
     }
 
   member __.TryGetToolTip (pos: Pos) (lineStr: LineStr) = async {
+    logger (sprintf "Get tooltip in %A for file %s" pos parseResults.FileName) [||]
+
     match Parsing.findLongIdents(pos.Col - 1, lineStr) with
     | None -> return Failure "Cannot find ident for tooltip"
     | Some(col,identIsland) ->
@@ -83,6 +89,8 @@ type ParseAndCheckResults
 
   member __.TryGetSymbolUse (pos: Pos) (lineStr: LineStr) =
     async {
+        logger (sprintf "Get symbol use in %A for file %s" pos parseResults.FileName) [||]
+
         match Parsing.findLongIdents(pos.Col - 1, lineStr) with
         | None -> return (Failure "No ident at this location")
         | Some(colu, identIsland) ->
@@ -97,6 +105,8 @@ type ParseAndCheckResults
 
   member __.TryGetF1Help (pos: Pos) (lineStr: LineStr) =
     async {
+        logger (sprintf "Get F1 help in %A for file %s" pos parseResults.FileName) [||]
+
         match Parsing.findLongIdents(pos.Col - 1, lineStr) with
         | None -> return (Failure "No ident at this location")
         | Some(colu, identIsland) ->
@@ -107,6 +117,8 @@ type ParseAndCheckResults
         | Some hlp -> return Success hlp}
 
   member __.TryGetCompletions (pos: Pos) (lineStr: LineStr) filter = async {
+    logger (sprintf "Get completions in %A for file %s" pos parseResults.FileName) [||]
+
     let longName, residue = Parsing.findLongIdentsAndResidue(pos.Col - 1, lineStr)
     try
       let! results = checkResults.GetDeclarationListInfo(Some parseResults, pos.Line, pos.Col, lineStr, longName, residue, fun (_,_) -> false)
@@ -171,7 +183,9 @@ type FSharpCompilerServiceChecker(logger : Logger) =
 
   let isResultObsolete fileName =
       match files.TryGetValue fileName with
-      | true, (_, Cancelled) -> true
+      | true, (_, Cancelled) ->
+        logger (sprintf "File: %s is obsolete" fileName ) [||]
+        true
       | _ -> false
 
   let fileChanged filePath version =
@@ -186,7 +200,6 @@ type FSharpCompilerServiceChecker(logger : Logger) =
         else oldVersion, oldState))
     |> ignore
 
-
   let fixFileName path =
     if (try Path.GetFullPath path |> ignore; true with _ -> false) then path
     else
@@ -197,7 +210,6 @@ type FSharpCompilerServiceChecker(logger : Logger) =
         </> Path.GetFileName path
 
   let isFSharpCore (s : string) = s.EndsWith "FSharp.Core.dll"
-
 
   let ensureCorrectFSharpCore (options: string[]) =
     Environment.fsharpCoreOpt
@@ -229,29 +241,25 @@ type FSharpCompilerServiceChecker(logger : Logger) =
 
   let getDependingProjects file (options : seq<string * FSharpProjectOptions>) =
     let project = options |> Seq.tryFind (fun (k,_) -> k = file)
-    project |> Option.map (fun (name, option) ->
+    let projects = project |> Option.map (fun (name, option) ->
       [
         yield! options
                |> Seq.map snd
                |> Seq.filter (fun o -> o.ReferencedProjects |> Array.map (fun (k,v) -> v.ProjectFileName) |> Array.contains option.ProjectFileName )
         yield option
       ])
-
-  member __.GetProjectOptionsFromScript(file, source) = async {
-    let! rawOptions = checker.GetProjectOptionsFromScript(file, source)
-    let opts =
-      rawOptions.OtherOptions
-      |> ensureCorrectFSharpCore
-      |> ensureCorrectVersions
-
-    return { rawOptions with OtherOptions = opts }
-  }
+    logger (sprintf "Projects depending on %s: %A" file project) [||]
+    projects
 
   member __.CheckProjectsInBackgroundForFile (file,options : seq<string * FSharpProjectOptions>) =
+    logger (sprintf "Parse projects in background for file: %s" file ) [||]
+
     defaultArg (getDependingProjects file options) []
     |> List.iter (checker.CheckProjectInBackground)
 
   member __.ParseProjectsForFile(file, options : seq<string * FSharpProjectOptions> ) =
+    logger (sprintf "Parse projects for file: %s" file ) [||]
+
     let project = options |> Seq.tryFind (fun (k,_) -> k = file)
     match project with
     | None -> async {return Failure "Project for current file not found"}
@@ -275,6 +283,8 @@ type FSharpCompilerServiceChecker(logger : Logger) =
 
   member __.ParseAndCheckFileInProject(filePath, version, source, options) =
     async {
+      logger (sprintf "Parse and check file: %s" filePath ) [||]
+
       fileChanged filePath version
       let fixedFilePath = fixFileName filePath
       let! res = Async.Catch (async {
@@ -307,10 +317,80 @@ type FSharpCompilerServiceChecker(logger : Logger) =
     }
 
   member __.TryGetRecentCheckResultsForFile(file, options, ?source) =
+    logger (sprintf "Try get recent check results file: %s" file ) [||]
+
     checker.TryGetRecentCheckResultsForFile(file, options, ?source=source)
     |> Option.map (fun (pr, cr, _) -> ParseAndCheckResults (pr, cr, logger))
 
 
+  member __.GetUsesOfSymbol (file, options : (SourceFilePath * FSharpProjectOptions) seq, (symbol : FSharpSymbol)) = async {
+    logger (sprintf "Get use of symbol %s in file %s" symbol.DisplayName file ) [||]
+
+    let projects = getDependingProjects file options
+    return!
+      match projects with
+      | None -> async {return [||]}
+      | Some projects -> async {
+        let! res =
+          projects
+          |> Seq.map (fun (opts) -> async {
+              let! res = checker.ParseAndCheckProject opts
+              return! res.GetUsesOfSymbol symbol
+            })
+          |> Async.Parallel
+        return res |> Array.collect id }
+  }
+
+  member __.GetDeclarations (fileName, source, options, version) = async {
+    logger (sprintf "Get declarations in file: %s" fileName ) [||]
+
+    let! parseResult =
+      match checker.TryGetRecentCheckResultsForFile(fileName, options,source), version with
+      | Some (pr, _, v), Some ver when v = ver ->  async {return pr}
+      | _, None -> checker.ParseFileInProject(fileName, source, options)
+      | _ ->
+        async {
+          let! chkd =
+            checker.FileParsed
+            |> Event.filter ((=) fileName)
+            |> Async.AwaitEvent
+
+          return!
+            match checker.TryGetRecentCheckResultsForFile(fileName,options,source) with
+            | None -> checker.ParseFileInProject(fileName, source, options)
+            | Some (pr,_,_) -> async {return pr}
+        }
+    return parseResult.GetNavigationItems().Declarations
+  }
+
+  member __.GetDeclarationsInProjects (options : seq<string * FSharpProjectOptions>) =
+      logger "Get declarations in all projects" [||]
+
+      options
+      |> Seq.distinctBy(fun (_, v) -> v.ProjectFileName)
+      |> Seq.map (fun (_, opts) -> async {
+          let! _ = checker.ParseAndCheckProject opts
+          return!
+            options
+            |> Seq.filter (fun (_, projectOpts) -> projectOpts = opts)
+            |> Seq.map (fun (projectFile,_) -> async {
+                let! parseRes, _ = checker.GetBackgroundCheckResultsForFileInProject(projectFile, opts)
+                return (parseRes.GetNavigationItems().Declarations |> Array.map (fun decl -> decl, projectFile))
+              })
+            |> Async.Parallel
+         })
+      |> Async.Parallel
+      |> Async.map (Seq.collect (Seq.collect id) >> Seq.toArray)
+
+  member __.GetProjectOptionsFromScript(file, source) = async {
+    let! rawOptions = checker.GetProjectOptionsFromScript(file, source)
+    let opts =
+      rawOptions.OtherOptions
+      |> ensureCorrectFSharpCore
+      |> ensureCorrectVersions
+
+    return { rawOptions with OtherOptions = opts }
+  }
 
   member __.TryGetProjectOptions (file: SourceFilePath, verbose: bool) : Result<_> =
     if not (File.Exists file) then
@@ -355,58 +435,8 @@ type FSharpCompilerServiceChecker(logger : Logger) =
       with e ->
         Failure e.Message
 
-  member __.GetUsesOfSymbol (file, options : (SourceFilePath * FSharpProjectOptions) seq, symbol) = async {
-    let projects = getDependingProjects file options
-    return!
-      match projects with
-      | None -> async {return [||]}
-      | Some projects -> async {
-        let! res =
-          projects
-          |> Seq.map (fun (opts) -> async {
-              let! res = checker.ParseAndCheckProject opts
-              return! res.GetUsesOfSymbol symbol
-            })
-          |> Async.Parallel
-        return res |> Array.collect id }
-  }
 
-  member __.GetDeclarations (fileName, source, options, version) = async {
-    let! parseResult =
-      match checker.TryGetRecentCheckResultsForFile(fileName, options,source), version with
-      | Some (pr, _, v), Some ver when v = ver ->  async {return pr}
-      | _, None -> checker.ParseFileInProject(fileName, source, options)
-      | _ ->
-        async {
-          let! chkd =
-            checker.FileParsed
-            |> Event.filter ((=) fileName)
-            |> Async.AwaitEvent
 
-          return!
-            match checker.TryGetRecentCheckResultsForFile(fileName,options,source) with
-            | None -> checker.ParseFileInProject(fileName, source, options)
-            | Some (pr,_,_) -> async {return pr}
-        }
-    return parseResult.GetNavigationItems().Declarations
-  }
-
-  member __.GetDeclarationsInProjects (options : seq<string * FSharpProjectOptions>) =
-      options
-      |> Seq.distinctBy(fun (_, v) -> v.ProjectFileName)
-      |> Seq.map (fun (_, opts) -> async {
-          let! _ = checker.ParseAndCheckProject opts
-          return!
-            options
-            |> Seq.filter (fun (_, projectOpts) -> projectOpts = opts)
-            |> Seq.map (fun (projectFile,_) -> async {
-                let! parseRes, _ = checker.GetBackgroundCheckResultsForFileInProject(projectFile, opts)
-                return (parseRes.GetNavigationItems().Declarations |> Array.map (fun decl -> decl, projectFile))
-              })
-            |> Async.Parallel
-         })
-      |> Async.Parallel
-      |> Async.map (Seq.collect (Seq.collect id) >> Seq.toArray)
 
 
 

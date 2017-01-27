@@ -13,11 +13,40 @@ type Result<'a> =
 type Pos =
     { Line: int
       Col: int }
+    override this.ToString() = sprintf "Line=%i, Col=%i" this.Line this.Col
 
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module Pos =
     let make line column = { Line = line; Col = column }
 
+module Logging =
+    type Level = Debug | Info | Warn | Error
+    /// A structured value that can be logged
+    type Value =
+        /// A field name and value
+        | Field of name: string * value: obj
+        | Exception of exn: exn
+        
+    /// Provides structured & templated logging.
+    type ILogger =
+        /// Writes a log event. Note the template should have `{named}` placeholders for
+        /// and matching fields.
+        /// Example: `logger.Log Info "Hello {who}" [| "world" |]`
+        abstract member Log: level: Level -> template: string -> fields: Value seq -> unit
+        /// Creates a new logger that already has fields attached to it. 
+        /// Example: `let requestSpecificLogger = logger.With "requestId" requestId`
+        /// Now any log event will automatically have the "requestId" field associated with it.
+        abstract member With: field: Value -> ILogger
+
+[<AutoOpen>]
+module LoggingExtensions =
+    open Logging
+
+    type ILogger with
+        member this.Info (template: string, [<ParamArray>] args: Value[]) = this.Log Info template args
+        member this.Debug (template: string, [<ParamArray>] args: Value[]) = this.Log Debug template args
+        member this.Warn (template: string, [<ParamArray>] args: Value[]) = this.Log Warn template args
+        member this.Error (template: string, [<ParamArray>] args: Value[]) = this.Log Error template args
 
 type Serializer = obj -> string
 type ProjectFilePath = string
@@ -222,5 +251,3 @@ type Path with
         try Path.GetFileName path
         with _ -> path
 
-
-type Logger = string -> obj[] -> unit

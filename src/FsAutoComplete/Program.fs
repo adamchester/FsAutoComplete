@@ -5,13 +5,36 @@ open System.IO
 open Microsoft.FSharp.Compiler
 open JsonSerializer
 open FsAutoComplete
+open FsAutoComplete.Utils
 
 module internal Main =
   open System.Collections.Concurrent
 
+  type FsacCommandLineLogger (fields: Utils.Logging.Value list) =
+    interface FsAutoComplete.Utils.Logging.ILogger with
+      member this.Log level template args =
+        // TODO: should we bother with anything else yet?
+        printfn "[%s %A] %s ==>%s\t%A"
+                 (DateTimeOffset.Now.ToString("HH:mm:ss"))
+                 level template (Environment.NewLine) (args |> Seq.append fields |> Seq.toList)
+
+      member this.With field =
+        FsacCommandLineLogger(List.Cons (field, fields)) :> Utils.Logging.ILogger
+
   module Response = CommandResponse
   let originalFs = AbstractIL.Internal.Library.Shim.FileSystem
-  let commands = Commands (writeJson, fun _ _ -> ()) //TODO: Add real logger for command line version
+  let logger = FsacCommandLineLogger [ Logging.Field("requestId", 0) ] :> Utils.Logging.ILogger
+
+  // TODO: remove these, just testing...
+  logger.Debug ("A typical debug message from {who}", Logging.Field("who", "me!"))
+  logger.Info ("A typical event happened, it was caused by {who}", Logging.Field("who", "me!"))
+  logger.Warn ("Be vary careful,  {who}", Logging.Field("who", "me!"))
+  logger
+    .With(Logging.Exception (exn "test"))
+    .With(Logging.Field("who", "you"))
+    .Error("testing, {who}", Logging.Field("who", "me!"))
+  
+  let commands = Commands (writeJson, logger)
   let fs = new FileSystem(originalFs, commands.Files.TryFind)
   AbstractIL.Internal.Library.Shim.FileSystem <- fs
   let commandQueue = new BlockingCollection<Command>(10)

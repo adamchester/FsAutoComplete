@@ -11,7 +11,7 @@ open Microsoft.FSharp.Compiler
 
 module Response = CommandResponse
 
-type Commands (serialize : Serializer, logger : Logger) =
+type Commands (serialize : Serializer, logger) =
     let checker = FSharpCompilerServiceChecker(logger)
     let state = FsAutoComplete.State.Initial
     let fsharpLintConfig = ConfigurationManager.ConfigurationManager()

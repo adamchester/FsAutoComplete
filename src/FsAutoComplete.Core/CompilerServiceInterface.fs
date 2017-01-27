@@ -4,17 +4,20 @@ open System
 open System.IO
 open Microsoft.FSharp.Compiler.SourceCodeServices
 open Utils
+open Utils.Logging
 open System.Collections.Concurrent
 
 type ParseAndCheckResults
     (
         parseResults: FSharpParseFileResults,
         checkResults: FSharpCheckFileResults,
-        logger      : Logger
+        logger      : Utils.Logging.ILogger
     ) =
 
   member __.TryGetMethodOverrides (lines: LineStr[]) (pos: Pos) = async {
-    logger (sprintf "Get method overrides in %A for file %s" pos parseResults.FileName) [||]
+    logger.Debug ("Get method overrides  in {pos} for file {fileName}",
+                  Field ("pos", pos),
+                  Field ("fileName", parseResults.FileName))
 
     // Find the starting point, ideally right after the first '('
     let lineCutoff = pos.Line - 6
@@ -51,7 +54,7 @@ type ParseAndCheckResults
     return Success(meth, commas) }
 
   member __.TryFindDeclaration (pos: Pos) (lineStr: LineStr) = async {
-    logger (sprintf "Get declaration in %A for file %s" pos parseResults.FileName) [||]
+    logger.Debug ("Get declaration in {pos} for file {fileName}", Field("pos", pos), Field("fileName", parseResults.FileName))
 
     match Parsing.findLongIdents(pos.Col - 1, lineStr) with
     | None -> return Failure "Could not find ident at this location"
@@ -65,7 +68,7 @@ type ParseAndCheckResults
     }
 
   member __.TryGetToolTip (pos: Pos) (lineStr: LineStr) = async {
-    logger (sprintf "Get tooltip in %A for file %s" pos parseResults.FileName) [||]
+    logger.Debug ("Get tooltip in {pos} for file {fileName}", Field("pos", pos), Field("fileName", parseResults.FileName))
 
     match Parsing.findLongIdents(pos.Col - 1, lineStr) with
     | None -> return Failure "Cannot find ident for tooltip"
@@ -89,7 +92,7 @@ type ParseAndCheckResults
 
   member __.TryGetSymbolUse (pos: Pos) (lineStr: LineStr) =
     async {
-        logger (sprintf "Get symbol use in %A for file %s" pos parseResults.FileName) [||]
+        logger.Debug ("Get symbol use in {pos} for file {fileName}", Field("pos", pos), Field("fileName", parseResults.FileName))
 
         match Parsing.findLongIdents(pos.Col - 1, lineStr) with
         | None -> return (Failure "No ident at this location")
@@ -105,7 +108,7 @@ type ParseAndCheckResults
 
   member __.TryGetF1Help (pos: Pos) (lineStr: LineStr) =
     async {
-        logger (sprintf "Get F1 help in %A for file %s" pos parseResults.FileName) [||]
+        logger.Debug ("Get F1 help in {pos} for file {fileName}", Field("pos", pos), Field("fileName", parseResults.FileName))
 
         match Parsing.findLongIdents(pos.Col - 1, lineStr) with
         | None -> return (Failure "No ident at this location")
@@ -117,7 +120,7 @@ type ParseAndCheckResults
         | Some hlp -> return Success hlp}
 
   member __.TryGetCompletions (pos: Pos) (lineStr: LineStr) filter = async {
-    logger (sprintf "Get completions in %A for file %s" pos parseResults.FileName) [||]
+    logger.Debug ("Get completions in {pos} for file {fileName}", Field("pos", pos), Field("fileName", parseResults.FileName))
 
     let longName, residue = Parsing.findLongIdentsAndResidue(pos.Col - 1, lineStr)
     try
@@ -171,7 +174,7 @@ type private FileState =
 
 type Version = int
 
-type FSharpCompilerServiceChecker(logger : Logger) =
+type FSharpCompilerServiceChecker(logger : Logging.ILogger) =
   let checker =
     FSharpChecker.Create(
       projectCacheSize = 200,
@@ -184,7 +187,7 @@ type FSharpCompilerServiceChecker(logger : Logger) =
   let isResultObsolete fileName =
       match files.TryGetValue fileName with
       | true, (_, Cancelled) ->
-        logger (sprintf "File: %s is obsolete" fileName ) [||]
+        logger.Debug ("File {fileName} is obsolete", Field("fileName", fileName))
         true
       | _ -> false
 
@@ -248,17 +251,17 @@ type FSharpCompilerServiceChecker(logger : Logger) =
                |> Seq.filter (fun o -> o.ReferencedProjects |> Array.map (fun (k,v) -> v.ProjectFileName) |> Array.contains option.ProjectFileName )
         yield option
       ])
-    logger (sprintf "Projects depending on %s: %A" file project) [||]
+    logger.Debug ("Projects depending on {file}: {projects}", Field("file", file), Field("project", project))
     projects
 
   member __.CheckProjectsInBackgroundForFile (file,options : seq<string * FSharpProjectOptions>) =
-    logger (sprintf "Parse projects in background for file: %s" file ) [||]
+    logger.Debug ("Parse projects in background for file {fileName}", Field("fileName", file))
 
     defaultArg (getDependingProjects file options) []
     |> List.iter (checker.CheckProjectInBackground)
 
   member __.ParseProjectsForFile(file, options : seq<string * FSharpProjectOptions> ) =
-    logger (sprintf "Parse projects for file: %s" file ) [||]
+    logger.Debug ("Parse projects for file: {fileName}", Field("fileName", file))
 
     let project = options |> Seq.tryFind (fun (k,_) -> k = file)
     match project with
@@ -283,7 +286,7 @@ type FSharpCompilerServiceChecker(logger : Logger) =
 
   member __.ParseAndCheckFileInProject(filePath, version, source, options) =
     async {
-      logger (sprintf "Parse and check file: %s" filePath ) [||]
+      logger.Debug ("Parse and check file: {fileName}", Field("fileName", filePath))
 
       fileChanged filePath version
       let fixedFilePath = fixFileName filePath
@@ -317,14 +320,16 @@ type FSharpCompilerServiceChecker(logger : Logger) =
     }
 
   member __.TryGetRecentCheckResultsForFile(file, options, ?source) =
-    logger (sprintf "Try get recent check results file: %s" file ) [||]
+    logger.Debug ("Try get recent check results file: {fileName}", Field("fileName", file))
 
     checker.TryGetRecentCheckResultsForFile(file, options, ?source=source)
     |> Option.map (fun (pr, cr, _) -> ParseAndCheckResults (pr, cr, logger))
 
 
   member __.GetUsesOfSymbol (file, options : (SourceFilePath * FSharpProjectOptions) seq, (symbol : FSharpSymbol)) = async {
-    logger (sprintf "Get use of symbol %s in file %s" symbol.DisplayName file ) [||]
+    logger.Debug ("Get use of symbol {symbol} in file {fileName}",
+                  Field ("symbol", symbol.DisplayName),
+                  Field ("fileName", file))
 
     let projects = getDependingProjects file options
     return!
@@ -342,7 +347,7 @@ type FSharpCompilerServiceChecker(logger : Logger) =
   }
 
   member __.GetDeclarations (fileName, source, options, version) = async {
-    logger (sprintf "Get declarations in file: %s" fileName ) [||]
+    logger.Debug ("Get declarations in file: {fileName}", Field("fileName", fileName))
 
     let! parseResult =
       match checker.TryGetRecentCheckResultsForFile(fileName, options,source), version with
@@ -364,7 +369,7 @@ type FSharpCompilerServiceChecker(logger : Logger) =
   }
 
   member __.GetDeclarationsInProjects (options : seq<string * FSharpProjectOptions>) =
-      logger "Get declarations in all projects" [||]
+      logger.Debug "Get declarations in all projects"
 
       options
       |> Seq.distinctBy(fun (_, v) -> v.ProjectFileName)

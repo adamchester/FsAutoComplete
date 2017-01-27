@@ -9,6 +9,8 @@ open Suave.WebPart
 open Suave.WebSocket
 open Suave.Sockets.Control
 open Suave.Filters
+open Suave.Logging
+
 open Newtonsoft.Json
 open Microsoft.FSharp.Compiler
 
@@ -35,16 +37,42 @@ module internal Utils =
             System.Text.Encoding.UTF8.GetString(rawForm)
         req.rawForm |> getString |> fromJson<'a>
 
+    [<Literal>]
+    let RequestIdName = "requestId"
+    let getRequestIdFromReq (req : HttpRequest) = req.Item RequestIdName
+
+let fsacToSuaveLogLevel = function
+    | Utils.Logging.Debug -> Suave.Logging.Info // elevate FSAC Debug events to Suave Info level
+    | Utils.Logging.Info -> Suave.Logging.Info
+    | Utils.Logging.Warn -> Suave.Logging.Warn
+    | Utils.Logging.Error -> Suave.Logging.Error
+
+type FsacToSuaveLogger (suaveLogger: Suave.Logging.Logger, fields: Utils.Logging.Value list) =
+    let requestIdTemplatePrefix = "[{" + RequestIdName + "}] "
+    interface FsAutoComplete.Utils.Logging.ILogger with
+        member this.Log level template args =
+            let suaveLogLevel = fsacToSuaveLogLevel level
+            suaveLogger.log suaveLogLevel (fun _ ->
+                let mutable suaveEvent = Suave.Logging.Message.event suaveLogLevel (requestIdTemplatePrefix + template)
+                let addNameValueToSuave name value = suaveEvent <- suaveEvent |> Suave.Logging.Message.setField name value
+                let addValueToSuaveEvent = function Logging.Field (name, value) -> addNameValueToSuave name (string value)
+                // Note: appending args *after* fields is important; any template fields (args) will overwrite
+                // the 'ambiant' logger fields.
+                fields |> Seq.append args |> Seq.iter addValueToSuaveEvent
+                suaveEvent
+            )
+            // Immediately ask Suave to queue the log event
+            |> Async.RunSynchronously
+
+        member this.With field = FsacToSuaveLogger(suaveLogger, List.Cons (field, fields)) :> Utils.Logging.ILogger
+
 [<EntryPoint>]
 let main argv =
     let mutable client : WebSocket option  = None
-    let logger = Logging.Targets.create Logging.Info [|"FSAC"; "Suave"|]
-
-    let logFunc msg parms =
-        printfn "[FSAC Logger] %s" msg //TODO: Use real logger
+    let logger = Logging.Targets.create Suave.Logging.Info [|"FSAC"; "Suave"|]
 
     System.Threading.ThreadPool.SetMinThreads(8, 8) |> ignore
-    let commands = Commands(writeJson, logFunc)
+    let commands = Commands(writeJson, FsacToSuaveLogger (logger, [ Utils.Logging.Field(RequestIdName, "TODO") ]))
     let originalFs = AbstractIL.Internal.Library.Shim.FileSystem
     let fs = new FileSystem(originalFs, commands.Files.TryFind)
     AbstractIL.Internal.Library.Shim.FileSystem <- fs
@@ -61,12 +89,20 @@ let main argv =
 
     let handler f : WebPart = fun (r : HttpContext) -> async {
           let data = r.request |> getResourceFromReq
-          let! res = Async.Catch (f data)
+          let reqId = r.request |> getRequestIdFromReq
+          let! res = Async.Catch (f reqId data)
           match res with
           | Choice1Of2 res ->
              let res' = res |> List.toArray |> Json.toJson
              return! Response.response HttpCode.HTTP_200 res' r
-          | Choice2Of2 e -> return! Response.response HttpCode.HTTP_500 (Json.toJson e) r
+          | Choice2Of2 e ->
+            logger.errorWithBP (Suave.Logging.Message.eventX "The handler of request at {requestUrlPathAndQuery} crashed"
+                                >> Suave.Logging.Message.setField "requestUrlPathAndQuery" r.request.url.PathAndQuery
+                                >> Suave.Logging.Message.addExn e
+                                >> Suave.Logging.Message.setField "SuaveRequest" r.request)
+            |> Async.RunSynchronously
+
+            return! Response.response HttpCode.HTTP_500 (Json.toJson e) r
         }
 
     let positionHandler (f : PositionRequest -> ParseAndCheckResults -> string -> string [] -> Async<string list>) : WebPart = fun (r : HttpContext) ->
@@ -111,7 +147,6 @@ let main argv =
                     | _ -> ()
                 }
 
-
     let fsacRequestLogger (ctx: HttpContext) =
         let fieldMap : Map<string, obj> =
             [
@@ -123,24 +158,26 @@ let main argv =
         "{requestMethod} {requestUrlPathAndQuery} {requestForm}", fieldMap
 
     let app =
-        logWithLevelStructured Logging.Info logger fsacRequestLogger
+        logWithLevelStructured Suave.Logging.Info logger fsacRequestLogger
         >=>
         choose [
             // path "/notify" >=> handShake echo
-            path "/parse" >=> handler (fun (data : ParseRequest) -> commands.Parse data.FileName data.Lines data.Version)
-            path "/parseProjects" >=> handler (fun (data : ProjectRequest) -> commands.ParseProjectsForFile data.FileName)
+            path "/parse" >=> handler (fun reqId (data : ParseRequest) -> commands.Parse data.FileName data.Lines data.Version)
+            path "/parseProjects" >=> handler (fun reqId (data : ProjectRequest) ->
+                failwith "hah testing"
+                commands.ParseProjectsForFile data.FileName)
             //TODO: Add filewatcher
-            path "/parseProjectsInBackground" >=> handler (fun (data : ProjectRequest) -> commands.ParseAndCheckProjectsInBackgroundForFile data.FileName)
-            path "/project" >=> handler (fun (data : ProjectRequest) -> commands.Project data.FileName false ignore)
-            path "/declarations" >=> handler (fun (data : DeclarationsRequest) -> commands.Declarations data.FileName (Some data.Version) )
+            path "/parseProjectsInBackground" >=> handler (fun reqId (data : ProjectRequest) -> commands.ParseAndCheckProjectsInBackgroundForFile data.FileName)
+            path "/project" >=> handler (fun reqId (data : ProjectRequest) -> commands.Project data.FileName false ignore)
+            path "/declarations" >=> handler (fun reqId (data : DeclarationsRequest) -> commands.Declarations data.FileName (Some data.Version) )
             path "/declarationsProjects" >=> fun httpCtx ->
                 async {
                     let! errors = commands.DeclarationsInProjects ()
                     let res = errors |> List.toArray |> Json.toJson
                     return! Response.response HttpCode.HTTP_200 res httpCtx
                 }
-            path "/helptext" >=> handler (fun (data : HelptextRequest) -> commands.Helptext data.Symbol |> async.Return)
-            path "/completion" >=> handler (fun (data : CompletionRequest) -> async {
+            path "/helptext" >=> handler (fun reqId (data : HelptextRequest) -> commands.Helptext data.Symbol |> async.Return)
+            path "/completion" >=> handler (fun reqId (data : CompletionRequest) -> async {
                 let file = Path.GetFullPath data.FileName
                 match commands.TryGetFileCheckerOptionsWithLines file with
                 | Failure s -> return [CommandResponse.error writeJson s]
@@ -169,10 +206,11 @@ let main argv =
                     let res = commands.CompilerLocation() |> List.toArray |> Json.toJson
                     return! Response.response HttpCode.HTTP_200 res httpCtx
                 }
-            path "/lint" >=> handler (fun (data: LintRequest) -> commands.Lint data.FileName)
+            path "/lint" >=> handler (fun reqId (data: LintRequest) -> commands.Lint data.FileName)
             path "/namespaces" >=> positionHandler (fun data tyRes lineStr _   -> commands.GetNamespaceSuggestions tyRes { Line = data.Line; Col = data.Column } lineStr)
             path "/unionCaseGenerator" >=> positionHandler (fun data tyRes lineStr lines   -> commands.GetUnionPatternMatchCases tyRes { Line = data.Line; Col = data.Column } lines lineStr)
         ] >=> logWithLevelStructured Logging.Info logger logFormatStructured
+
 
     let port =
         try

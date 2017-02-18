@@ -38,13 +38,14 @@ module Logging =
     type Value =
         /// A field name and value
         | Field of name: string * value: obj
+        /// An exception
         | Exception of exn: exn
 
     /// Provides structured & templated logging.
     type ILogger =
         /// Writes a log event. Note the template should have `{named}` placeholders for
         /// and matching fields.
-        /// Example: `logger.Log Info "Hello {who}" [| "world" |]`
+        /// Example: `logger.Log Info "Hello {who}" [| Field("who", world") |]`
         abstract member Log: level: Level -> template: string -> fields: Value seq -> unit
         /// Creates a new logger that already has fields attached to it.
         /// Example: `let requestSpecificLogger = logger.With "requestId" requestId`
@@ -381,6 +382,3 @@ type Path with
 
 
 let asyncMaybe = AsyncMaybeBuilder()
-
-type Logger = string -> obj[] -> unit
-

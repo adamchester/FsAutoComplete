@@ -29,9 +29,9 @@ module internal Main =
   module Response = CommandResponse
   let originalFs = AbstractIL.Internal.Library.Shim.FileSystem
   let logger = NullLogger() :> Utils.Logging.ILogger
-  // let logger = FsacCommandLineLogger [ Logging.Field("requestId", 0) ] :> Utils.Logging.ILogger
 
-  // // TODO: remove these, just testing...
+  // TODO: remove these, just testing...
+  // let logger = FsacCommandLineLogger [ Logging.Field("requestId", 0) ] :> Utils.Logging.ILogger
   // logger.Debug ("A typical debug message from {who}", Logging.Field("who", "me!"))
   // logger.Info ("A typical event happened, it was caused by {who}", Logging.Field("who", "me!"))
   // logger.Warn ("Be vary careful,  {who}", Logging.Field("who", "me!"))

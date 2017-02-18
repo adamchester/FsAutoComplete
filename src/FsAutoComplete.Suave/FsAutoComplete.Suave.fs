@@ -47,6 +47,9 @@ let fsacToSuaveLogLevel = function
     | Utils.Logging.Warn -> Suave.Logging.Warn
     | Utils.Logging.Error -> Suave.Logging.Error
 
+/// Forwards FSAC log messages to the Suave logger. The advantage is that we can reuse the Suave
+/// Logging (i.e. Logary.Facade) which can be pretty-printed or output to more serious log targets
+/// like file loggers and log servers, etc.
 type FsacToSuaveLogger (suaveLogger: Suave.Logging.Logger, fields: Utils.Logging.Value list) =
     let requestIdTemplatePrefix = "[{" + RequestIdName + "}] "
     interface FsAutoComplete.Utils.Logging.ILogger with
@@ -55,7 +58,10 @@ type FsacToSuaveLogger (suaveLogger: Suave.Logging.Logger, fields: Utils.Logging
             suaveLogger.log suaveLogLevel (fun _ ->
                 let mutable suaveEvent = Suave.Logging.Message.event suaveLogLevel (requestIdTemplatePrefix + template)
                 let addNameValueToSuave name value = suaveEvent <- suaveEvent |> Suave.Logging.Message.setField name value
-                let addValueToSuaveEvent = function Logging.Field (name, value) -> addNameValueToSuave name (string value)
+                let addExnToSuave exn = suaveEvent <- suaveEvent |> Suave.Logging.Message.addExn exn
+                let addValueToSuaveEvent = function
+                    | Logging.Field (name, value) -> addNameValueToSuave name (string value)
+                    | Logging.Exception exn -> addExnToSuave exn
                 // Note: appending args *after* fields is important; any template fields (args) will overwrite
                 // the 'ambiant' logger fields.
                 fields |> Seq.append args |> Seq.iter addValueToSuaveEvent
@@ -69,10 +75,13 @@ type FsacToSuaveLogger (suaveLogger: Suave.Logging.Logger, fields: Utils.Logging
 [<EntryPoint>]
 let main argv =
     let mutable client : WebSocket option  = None
-    let logger = Logging.Targets.create Suave.Logging.Info [|"FSAC"; "Suave"|]
+
+    let coreCommandsSuaveLogger = Suave.Logging.Log.create "FSAC.Core.Commands"
+    // TODO: figure out how to flow the RequestId through. It looks like this wont work
+    let coreComamndsLogger = FsacToSuaveLogger (coreCommandsSuaveLogger, [ Utils.Logging.Field(RequestIdName, "TODO") ])
+    let commands = Commands(writeJson, coreComamndsLogger)
 
     System.Threading.ThreadPool.SetMinThreads(8, 8) |> ignore
-    let commands = Commands(writeJson, FsacToSuaveLogger (logger, [ Utils.Logging.Field(RequestIdName, "TODO") ]))
     let originalFs = AbstractIL.Internal.Library.Shim.FileSystem
     let fs = new FileSystem(originalFs, commands.Files.TryFind)
     AbstractIL.Internal.Library.Shim.FileSystem <- fs
@@ -96,10 +105,11 @@ let main argv =
              let res' = res |> List.toArray |> Json.toJson
              return! Response.response HttpCode.HTTP_200 res' r
           | Choice2Of2 e ->
-            logger.errorWithBP (Suave.Logging.Message.eventX "The handler of request at {requestUrlPathAndQuery} crashed"
-                                >> Suave.Logging.Message.setField "requestUrlPathAndQuery" r.request.url.PathAndQuery
-                                >> Suave.Logging.Message.addExn e
-                                >> Suave.Logging.Message.setField "SuaveRequest" r.request)
+            coreCommandsSuaveLogger.errorWithBP
+                (Suave.Logging.Message.eventX "The handler of request at {requestUrlPathAndQuery} crashed"
+                >> Suave.Logging.Message.setField "requestUrlPathAndQuery" r.request.url.PathAndQuery
+                >> Suave.Logging.Message.addExn e
+                >> Suave.Logging.Message.setField "SuaveRequest" r.request)
             |> Async.RunSynchronously
 
             return! Response.response HttpCode.HTTP_500 (Json.toJson e) r
@@ -158,7 +168,7 @@ let main argv =
         "{requestMethod} {requestUrlPathAndQuery} {requestForm}", fieldMap
 
     let app =
-        logWithLevelStructured Suave.Logging.Info logger fsacRequestLogger
+        logWithLevelStructured Suave.Logging.Info coreCommandsSuaveLogger fsacRequestLogger
         >=>
         choose [
             // path "/notify" >=> handShake echo
@@ -209,7 +219,7 @@ let main argv =
             path "/lint" >=> handler (fun reqId (data: LintRequest) -> commands.Lint data.FileName)
             path "/namespaces" >=> positionHandler (fun data tyRes lineStr _   -> commands.GetNamespaceSuggestions tyRes { Line = data.Line; Col = data.Column } lineStr)
             path "/unionCaseGenerator" >=> positionHandler (fun data tyRes lineStr lines   -> commands.GetUnionPatternMatchCases tyRes { Line = data.Line; Col = data.Column } lines lineStr)
-        ] >=> logWithLevelStructured Logging.Info logger logFormatStructured
+        ] >=> logWithLevelStructured Info coreCommandsSuaveLogger logFormatStructured
 
 
     let port =
@@ -222,7 +232,8 @@ let main argv =
     let withPort = { defaultBinding.socketBinding with port = uint16 port }
     let serverConfig =
         { defaultConfig with bindings = [{ defaultBinding with socketBinding = withPort }]
-                             logger = logger }
+                             // Note we use a different logger for suave itself
+                             logger = Logging.Targets.create Info [|"Suave"|] }
 
     startWebServer serverConfig app
     0

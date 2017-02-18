@@ -76,15 +76,26 @@ type FsacToSuaveLogger (suaveLogger: Suave.Logging.Logger, fields: Utils.Logging
 let main argv =
     let mutable client : WebSocket option  = None
 
-    let coreCommandsSuaveLogger = Suave.Logging.Log.create "FSAC.Core.Commands"
+    // Creates a new console log target with Verbose level. We use this separate
+    // Console target because Suave has it's own internal debug logs that we don't
+    // want to see mixed in with our logs.
+    let getFsacLogger name =
+        LiterateConsoleTarget(name, Verbose, // Display even Verbose entries at the console
+                              consoleSemaphore = Global.defaultConfig.consoleSemaphore
+        ) :> Logger
+
     // TODO: figure out how to flow the RequestId through. It looks like this wont work
-    let coreComamndsLogger = FsacToSuaveLogger (coreCommandsSuaveLogger, [ Utils.Logging.Field(RequestIdName, "TODO") ])
+    let coreComamndsLogger = FsacToSuaveLogger(
+                                getFsacLogger [|"FSAC";"Core";"Commands"|],
+                                [ Utils.Logging.Field(RequestIdName, "TODO") ])
     let commands = Commands(writeJson, coreComamndsLogger)
 
     System.Threading.ThreadPool.SetMinThreads(8, 8) |> ignore
     let originalFs = AbstractIL.Internal.Library.Shim.FileSystem
     let fs = new FileSystem(originalFs, commands.Files.TryFind)
     AbstractIL.Internal.Library.Shim.FileSystem <- fs
+
+    let requestLogger = getFsacLogger [|"FSAC";"Core";"Request"|]
 
     // commands.FileChecked
     // |> Event.add (fun response ->
@@ -105,7 +116,7 @@ let main argv =
              let res' = res |> List.toArray |> Json.toJson
              return! Response.response HttpCode.HTTP_200 res' r
           | Choice2Of2 e ->
-            coreCommandsSuaveLogger.errorWithBP
+            requestLogger.errorWithBP
                 (Suave.Logging.Message.eventX "The handler of request at {requestUrlPathAndQuery} crashed"
                 >> Suave.Logging.Message.setField "requestUrlPathAndQuery" r.request.url.PathAndQuery
                 >> Suave.Logging.Message.addExn e
@@ -158,17 +169,24 @@ let main argv =
                 }
 
     let fsacRequestLogger (ctx: HttpContext) =
-        let fieldMap : Map<string, obj> =
-            [
-                "requestMethod", box (ctx.request.``method``)
-                "requestUrlPathAndQuery", box (ctx.request.url.PathAndQuery)
-                "httpStatusCode", box ctx.response.status.code
-                "requestForm", box ctx.request.form
-            ] |> Map
-        "{requestMethod} {requestUrlPathAndQuery} {requestForm}", fieldMap
+       "Received {requestMethod} at {requestUrlPathAndQuery}",
+        [
+            "requestMethod", box (ctx.request.``method``)
+            "requestUrlPathAndQuery", box (ctx.request.url.PathAndQuery)
+            "requestHeaders", box (ctx.request.headers)
+        ] |> Map
+ 
+    let fsacResponseLogger (ctx: HttpContext) =
+        "Completed {requestMethod} at {requestUrlPathAndQuery} with {httpStatusReason} ({httpStatusCode})",
+        [
+            "requestMethod", box (ctx.request.``method``)
+            "requestUrlPathAndQuery", box (ctx.request.url.PathAndQuery)
+            "httpStatusCode", box ctx.response.status.code
+            "httpStatusReason", box ctx.response.status.reason
+        ] |> Map
 
     let app =
-        logWithLevelStructured Suave.Logging.Info coreCommandsSuaveLogger fsacRequestLogger
+        logStructured requestLogger fsacRequestLogger
         >=>
         choose [
             // path "/notify" >=> handShake echo
@@ -219,7 +237,8 @@ let main argv =
             path "/lint" >=> handler (fun reqId (data: LintRequest) -> commands.Lint data.FileName)
             path "/namespaces" >=> positionHandler (fun data tyRes lineStr _   -> commands.GetNamespaceSuggestions tyRes { Line = data.Line; Col = data.Column } lineStr)
             path "/unionCaseGenerator" >=> positionHandler (fun data tyRes lineStr lines   -> commands.GetUnionPatternMatchCases tyRes { Line = data.Line; Col = data.Column } lines lineStr)
-        ] >=> logWithLevelStructured Info coreCommandsSuaveLogger logFormatStructured
+        ]
+        >=> logStructured requestLogger logFormatStructured
 
 
     let port =
@@ -232,7 +251,7 @@ let main argv =
     let withPort = { defaultBinding.socketBinding with port = uint16 port }
     let serverConfig =
         { defaultConfig with bindings = [{ defaultBinding with socketBinding = withPort }]
-                             // Note we use a different logger for suave itself
+                             // For suave itself, we don't want it's internal debug or verbose messages
                              logger = Logging.Targets.create Info [|"Suave"|] }
 
     startWebServer serverConfig app

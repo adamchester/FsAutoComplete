@@ -47,7 +47,7 @@ NUGET
     FSharp.Compiler.Service.ProjectCracker (8.0)
     FSharp.Core (4.0.0.1) - redirects: on
     Newtonsoft.Json (9.0.1)
-    Suave (2.0.1)
+    Suave (2.0.3)
       FSharp.Core (>= 4.0.0.1)
     System.Collections.Immutable (1.3.1)
     System.Reflection.Metadata (1.4.2)
